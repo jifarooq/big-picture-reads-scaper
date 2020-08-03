@@ -67,9 +67,6 @@ func handleRequest() (string, error) {
 	// Build json & send
 	data, _ := json.Marshal(articles)
 	err = sendSimpleMessage(data)
-	if err != nil {
-		fmt.Println(err)
-	}
 	return "", err
 }
 
