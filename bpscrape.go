@@ -40,7 +40,7 @@ func handleRequest() (string, error) {
 		title, _ := s.Attr("title")
 		title = strings.ToLower(title)
 
-		if strings.Contains(title, "day") && strings.Contains(title, "read") {
+		if (strings.Contains(title, "day") || strings.Contains(title, "weekend")) && strings.Contains(title, "read") {
 			postURL, _ = s.Attr("href")
 			return false
 		}
