@@ -56,7 +56,7 @@ func handleRequest() (string, error) {
 
 	// Scrape articles from post
 	var articles []article
-	postDoc.Find("blockquote p a").Each(func(i int, s *goquery.Selection) {
+	postDoc.Find(".pf-content p a").Each(func(i int, s *goquery.Selection) {
 		url, _ := s.Attr("href")
 		articles = append(articles, article{URL: url})
 	})
