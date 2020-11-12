@@ -23,7 +23,11 @@ type article struct {
 }
 
 func main() {
-	lambda.Start(handleRequest)
+	if os.Getenv("LAMBDA_TASK_ROOT") != "" {
+		lambda.Start(handleRequest)
+	} else {
+		handleRequest()
+	}
 }
 
 func handleRequest() (string, error) {
@@ -56,7 +60,7 @@ func handleRequest() (string, error) {
 
 	// Scrape articles from post
 	var articles []article
-	postDoc.Find("div[itemprop='articleBody'] p a").Each(func(i int, s *goquery.Selection) {
+	postDoc.Find("div[itemprop='articleBody'] blockquote p a").Each(func(i int, s *goquery.Selection) {
 		url, _ := s.Attr("href")
 		articles = append(articles, article{URL: url})
 	})
@@ -88,6 +92,7 @@ func loadDocument(url string) (*goquery.Document, error) {
 func addPageTitles(articles []article) {
 	for i := range articles {
 		url := articles[i].URL
+		fmt.Println("Processing article url", url)
 
 		// Damn it Bloomberg!
 		if strings.Contains(url, "bloomberg") {
