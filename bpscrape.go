@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	neturl "net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -15,7 +13,13 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ses"
 )
+
+var local bool
 
 type article struct {
 	URL   string `json:"url"`
@@ -26,30 +30,33 @@ func main() {
 	if os.Getenv("LAMBDA_TASK_ROOT") != "" {
 		lambda.Start(handleRequest)
 	} else {
+		local = true
 		handleRequest()
 	}
 }
 
 func handleRequest() (string, error) {
-	// Load Big Picture blog root document
-	blogDoc, err := loadDocument("http://ritholtz.com/")
-	if err != nil {
-		log.Fatal(err)
-		return "", err
-	}
-
-	// Find today's post within root document
-	var postURL string
-	blogDoc.Find(".post-title-link").EachWithBreak(func(i int, s *goquery.Selection) bool {
-		title, _ := s.Attr("title")
-		title = strings.ToLower(title)
-
-		if (strings.Contains(title, "day") || strings.Contains(title, "weekend")) && strings.Contains(title, "read") {
-			postURL, _ = s.Attr("href")
-			return false
+	// Find either today's post within root document, or use the provided post
+	postURL := os.Getenv("POST_URL")
+	if postURL == "" {
+		// Load Big Picture blog root document
+		blogDoc, err := loadDocument("http://ritholtz.com/")
+		if err != nil {
+			log.Fatal(err)
+			return "", err
 		}
-		return true
-	})
+
+		blogDoc.Find(".post-title-link").EachWithBreak(func(i int, s *goquery.Selection) bool {
+			title, _ := s.Attr("title")
+			title = strings.ToLower(title)
+
+			if (strings.Contains(title, "day") || strings.Contains(title, "weekend")) && strings.Contains(title, "read") {
+				postURL, _ = s.Attr("href")
+				return false
+			}
+			return true
+		})
+	}
 
 	// Load post document
 	postDoc, err := loadDocument(postURL)
@@ -68,9 +75,14 @@ func handleRequest() (string, error) {
 	// Add page titles
 	addPageTitles(articles)
 
-	// Build json & send
+	// Build json & send or print
 	data, _ := json.Marshal(articles)
-	err = sendSimpleMessage(data)
+	if local {
+		fmt.Println(string(data))
+	} else {
+		err = sendEmail(data)
+	}
+
 	return "", err
 }
 
@@ -132,43 +144,71 @@ func getBlockedPageTitle(url string) string {
 	return strings.ReplaceAll(title, "-", " ")
 }
 
-func sendSimpleMessage(data []byte) error {
-	// Env vars
+func sendEmail(data []byte) error {
 	var (
-		sandboxID = os.Getenv("MAILGUN_SANDBOX_ID")
-		apiKey    = os.Getenv("MAILGUN_API_KEY")
-		emailAddr = os.Getenv("EMAIL_ADDRESS")
+		toFrom  = os.Getenv("EMAIL_ADDRESS")
+		subject = "big picture reads json " + strconv.Itoa(int(time.Now().Unix()))
+		body    = string(data)
+		charSet = "UTF-8"
 	)
 
-	now := int(time.Now().Unix())
-
-	// Build payload
-	vals := neturl.Values{}
-	vals.Add("from", fmt.Sprintf("mailgun me <postmaster@sandbox%s.mailgun.org>", sandboxID))
-	vals.Add("to", fmt.Sprintf("Justin <%s>", emailAddr))
-	vals.Add("subject", "big picture reads json "+strconv.Itoa(now))
-	vals.Add("text", string(data))
-	body := []byte(vals.Encode())
-
-	// Init req
-	url := "https://api.mailgun.net/v3/sandbox" + sandboxID + ".mailgun.org/messages"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	// Create a new aws session.
+	sess, err := session.NewSession(&aws.Config{Region: aws.String("us-west-2")})
 	if err != nil {
 		return err
 	}
 
-	// Add auth & build client
-	req.SetBasicAuth("api", apiKey)
-	req.Header.Add("content-type", "application/x-www-form-urlencoded")
-	cli := &http.Client{}
+	// Create an SES session.
+	svc := ses.New(sess)
 
-	// Make request
-	res, err := cli.Do(req)
-	if res.StatusCode/100 != 2 {
-		buf := new(bytes.Buffer)
-		buf.ReadFrom(res.Body)
-		err = errors.New(buf.String())
+	// Content helper
+	var buildContent = func(text string) *ses.Content {
+		return &ses.Content{
+			Charset: aws.String(charSet),
+			Data:    aws.String(text),
+		}
 	}
 
-	return err
+	// Assemble the email.
+	input := &ses.SendEmailInput{
+		Destination: &ses.Destination{
+			ToAddresses: []*string{aws.String(toFrom)},
+		},
+		Message: &ses.Message{
+			Body: &ses.Body{
+				// Html: ...
+				Text: buildContent(body),
+			},
+			Subject: buildContent(subject),
+		},
+		Source: aws.String(toFrom),
+	}
+
+	// Attempt to send the email.
+	result, err := svc.SendEmail(input)
+
+	// Display error messages if they occur.
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			case ses.ErrCodeMessageRejected:
+				fmt.Println(ses.ErrCodeMessageRejected, aerr.Error())
+			case ses.ErrCodeMailFromDomainNotVerifiedException:
+				fmt.Println(ses.ErrCodeMailFromDomainNotVerifiedException, aerr.Error())
+			case ses.ErrCodeConfigurationSetDoesNotExistException:
+				fmt.Println(ses.ErrCodeConfigurationSetDoesNotExistException, aerr.Error())
+			default:
+				fmt.Println(aerr.Error())
+			}
+		} else {
+			// Print the error, cast err to awserr.Error to get the Code and Message from an error.
+			fmt.Println(err.Error())
+		}
+
+		return err
+	}
+
+	fmt.Println("Email Sent to address: " + toFrom)
+	fmt.Println(result)
+	return nil
 }
