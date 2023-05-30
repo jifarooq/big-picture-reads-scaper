@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -40,9 +39,9 @@ func handleRequest() (string, error) {
 	postURL := os.Getenv("POST_URL")
 	if postURL == "" {
 		// Load Big Picture blog root document
-		blogDoc, err := loadDocument("http://ritholtz.com/")
+		blogDoc, err := loadDocument("https://ritholtz.com/category/links/")
 		if err != nil {
-			log.Fatal(err)
+			fmt.Println("Err loading ritholtz.com:", err)
 			return "", err
 		}
 
@@ -61,7 +60,7 @@ func handleRequest() (string, error) {
 	// Load post document
 	postDoc, err := loadDocument(postURL)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println("Err loading blog post", err)
 		return "", err
 	}
 
