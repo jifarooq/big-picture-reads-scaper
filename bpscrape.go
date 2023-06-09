@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -79,7 +77,7 @@ func handleRequest() (string, error) {
 	if local {
 		fmt.Println(string(data))
 	} else {
-		err = sendEmail(data)
+		err = sendEmail(data, postURL)
 	}
 
 	return "", err
@@ -143,10 +141,10 @@ func getBlockedPageTitle(url string) string {
 	return strings.ReplaceAll(title, "-", " ")
 }
 
-func sendEmail(data []byte) error {
+func sendEmail(data []byte, postURL string) error {
 	var (
 		toFrom  = os.Getenv("EMAIL_ADDRESS")
-		subject = "big picture reads json " + strconv.Itoa(int(time.Now().Unix()))
+		subject = "big picture reads json " + postURL
 		body    = string(data)
 		charSet = "UTF-8"
 	)
